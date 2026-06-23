@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ECO-GUARD ESP32 — Online Dashboard</title>
+  <meta name="description" content="Dashboard monitoring lingkungan rumah berbasis ESP32 secara real-time via MQTT WebSocket. Pantau suhu, kelembaban, tekanan udara, dan kualitas udara dari mana saja.">
+
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;900&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Custom CSS (sama dengan versi lokal) -->
+  <link rel="stylesheet" href="style.css">
+  <!-- MQTT.js via CDN (pengganti EventSource) -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+</head>
+
+<body>
+
+  <!-- Definisikan Gradien SVG Global -->
+  <svg style="width:0; height:0; position:absolute;" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient id="temp-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#ff7e5f" />
+        <stop offset="100%" stop-color="#feb47b" />
+      </linearGradient>
+      <linearGradient id="hum-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#00c6ff" />
+        <stop offset="100%" stop-color="#0072ff" />
+      </linearGradient>
+      <linearGradient id="press-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#b650ea" />
+        <stop offset="100%" stop-color="#e062c3" />
+      </linearGradient>
+      <linearGradient id="aqi-grad" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#11998e" />
+        <stop offset="100%" stop-color="#38ef7d" />
+      </linearGradient>
+    </defs>
+  </svg>
+
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-transparent border-bottom border-secondary-subtle py-3">
+    <div class="container">
+      <a class="navbar-brand navbar-brand-custom" href="#">
+        <i class="fa-solid fa-house-laptop me-2"></i>ECO-GUARD ESP32
+      </a>
+      <div class="d-flex align-items-center gap-3 flex-wrap">
+        <!-- Status Koneksi MQTT (Dinamis) -->
+        <span id="mqtt-status" class="text-secondary small d-none d-sm-inline">
+          <i class="fa-solid fa-circle-nodes me-1"></i> Menghubungkan ke MQTT...
+        </span>
+        <span class="text-secondary small">
+          <i class="fa-solid fa-circle-nodes me-1 text-info"></i> MQTT Alert: Active
+        </span>
+        <!-- RGB LED Virtual Glow -->
+        <div class="d-flex align-items-center gap-2 bg-dark-subtle px-3 rounded-pill border border-secondary-subtle" style="padding-top:0.35rem;padding-bottom:0.35rem;">
+          <span class="small text-secondary">LED RGB:</span>
+          <div id="led-indicator" class="led-glow led-active"></div>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Container -->
+  <div class="container mt-4">
+
+    <!-- Banner Notifikasi Alert (Dinamis via JS) -->
+    <div id="alert-banner" class="alert-banner d-none">
+      <div class="d-flex align-items-center gap-2">
+        <i class="fa-solid fa-triangle-exclamation text-danger fs-5"></i>
+        <div>
+          <strong class="text-danger">Peringatan Kualitas Udara Buruk!</strong>
+          <span class="text-white ms-1" id="alert-message">Indeks AQI melampaui batas aman.</span>
+        </div>
+      </div>
+      <span class="threshold-badge text-danger border-danger">AQI > 100</span>
+    </div>
+
+    <!-- Banner Menunggu Data (tampil saat belum ada data dari ESP32) -->
+    <div id="waiting-banner" class="alert alert-secondary d-flex align-items-center gap-3 mb-4">
+      <div class="spinner-border spinner-border-sm text-info" role="status"></div>
+      <span>Menunggu data dari ESP32 via MQTT broker... Pastikan ESP32 aktif dan terhubung ke WiFi.</span>
+    </div>
+
+    <!-- Grid 4 Gauges Utama -->
+    <div class="row g-4">
+
+      <!-- 1. Suhu -->
+      <div class="col-6 col-lg-3">
+        <div class="glass-card p-4 text-center h-100">
+          <div class="card-title-custom justify-content-center">
+            <i class="fa-solid fa-temperature-half text-danger"></i> Suhu
+          </div>
+          <div class="gauge-wrapper">
+            <svg class="gauge-svg" viewBox="0 0 100 100">
+              <circle class="gauge-track" cx="50" cy="50" r="40" />
+              <circle id="gauge-temp" class="gauge-bar" cx="50" cy="50" r="40" stroke="url(#temp-grad)" />
+            </svg>
+            <div class="gauge-info">
+              <span id="val-temp" class="gauge-value">--</span>
+              <span class="gauge-unit">°C</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Kelembaban -->
+      <div class="col-6 col-lg-3">
+        <div class="glass-card p-4 text-center h-100">
+          <div class="card-title-custom justify-content-center">
+            <i class="fa-solid fa-droplet text-primary"></i> Kelembaban
+          </div>
+          <div class="gauge-wrapper">
+            <svg class="gauge-svg" viewBox="0 0 100 100">
+              <circle class="gauge-track" cx="50" cy="50" r="40" />
+              <circle id="gauge-hum" class="gauge-bar" cx="50" cy="50" r="40" stroke="url(#hum-grad)" />
+            </svg>
+            <div class="gauge-info">
+              <span id="val-hum" class="gauge-value">--</span>
+              <span class="gauge-unit">% RH</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. Tekanan Udara -->
+      <div class="col-6 col-lg-3">
+        <div class="glass-card p-4 text-center h-100">
+          <div class="card-title-custom justify-content-center">
+            <i class="fa-solid fa-gauge-high text-info"></i> Tekanan
+          </div>
+          <div class="gauge-wrapper">
+            <svg class="gauge-svg" viewBox="0 0 100 100">
+              <circle class="gauge-track" cx="50" cy="50" r="40" />
+              <circle id="gauge-press" class="gauge-bar" cx="50" cy="50" r="40" stroke="url(#press-grad)" />
+            </svg>
+            <div class="gauge-info">
+              <span id="val-press" class="gauge-value">--</span>
+              <span class="gauge-unit">hPa</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. Air Quality Index (AQI) -->
+      <div class="col-6 col-lg-3">
+        <div class="glass-card p-4 text-center h-100">
+          <div class="card-title-custom justify-content-center">
+            <i class="fa-solid fa-wind text-success"></i> Kualitas Udara
+          </div>
+          <div class="gauge-wrapper">
+            <svg class="gauge-svg" viewBox="0 0 100 100">
+              <circle class="gauge-track" cx="50" cy="50" r="40" />
+              <circle id="gauge-aqi" class="gauge-bar" cx="50" cy="50" r="40" stroke="url(#aqi-grad)" />
+            </svg>
+            <div class="gauge-info">
+              <span id="val-aqi" class="gauge-value">--</span>
+              <span id="lbl-aqi-status" class="gauge-unit">Good</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Baris Tengah: Kenyamanan Ruangan & Control -->
+    <div class="row g-4 mt-2">
+
+      <!-- Indeks Kenyamanan (Heat Index) -->
+      <div class="col-12 col-md-5">
+        <div class="glass-card p-4 h-100 d-flex flex-column justify-content-between">
+          <div>
+            <div class="card-title-custom">
+              <i class="fa-solid fa-heart-pulse text-warning"></i> Indeks Kenyamanan
+            </div>
+            <div class="d-flex align-items-baseline gap-3 mb-2">
+              <span class="display-5 fw-bold" id="val-hi">--</span>
+              <span class="fs-4 text-secondary">°C</span>
+              <span id="badge-comfort" class="comfort-badge badge-good ms-auto">Nyaman</span>
+            </div>
+            <p class="text-secondary small mb-3">
+              Heat Index mengukur bagaimana suhu ruangan dirasakan tubuh manusia dengan memperhitungkan kelembaban
+              relatif.
+            </p>
+          </div>
+          <div class="border-top border-secondary-subtle pt-3 mt-auto">
+            <div class="row text-center text-sm-start">
+              <div class="col-6">
+                <span class="text-secondary small d-block">PPM MQ-135</span>
+                <strong id="val-ppm" class="fs-5">-- ppm</strong>
+              </div>
+              <div class="col-6">
+                <span class="text-secondary small d-block">Terakhir Diupdate</span>
+                <strong id="val-time" class="fs-5 text-info">--:--:--</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Info MQTT Online -->
+      <div class="col-12 col-md-7">
+        <div class="glass-card p-4 h-100 d-flex flex-column justify-content-between">
+          <div>
+            <div class="card-title-custom">
+              <i class="fa-solid fa-cloud text-info"></i> Status Koneksi Cloud
+            </div>
+            <p class="text-secondary mb-3">
+              Dashboard ini terhubung langsung ke broker MQTT publik via <strong>WebSocket (WSS)</strong>.
+              Data dari ESP32 akan muncul secara real-time tanpa memerlukan server tambahan.
+            </p>
+            <div class="d-flex flex-column gap-2 small">
+              <div class="d-flex justify-content-between border-bottom border-secondary-subtle pb-2">
+                <span class="text-secondary">🌐 Broker MQTT</span>
+                <code class="text-info">broker.emqx.io:8084</code>
+              </div>
+              <div class="d-flex justify-content-between border-bottom border-secondary-subtle pb-2">
+                <span class="text-secondary">📡 Topik Data Sensor</span>
+                <code class="text-success">home/sensor_data</code>
+              </div>
+              <div class="d-flex justify-content-between">
+                <span class="text-secondary">🔔 Topik Alert</span>
+                <code class="text-warning">home/alert</code>
+              </div>
+            </div>
+          </div>
+          <div class="d-flex flex-wrap gap-3 mt-4">
+            <a href="https://mqttx.app/web" target="_blank" id="btn-mqttx" class="btn-glass">
+              <i class="fa-solid fa-terminal fs-5"></i> Buka MQTTX Web
+            </a>
+            <button id="btn-demo" class="btn-glass bg-opacity-10 border-info text-info">
+              <i class="fa-solid fa-wand-magic-sparkles"></i> Info Threshold
+            </button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Baris Bawah: Grafik Historis -->
+    <div class="row g-4 mt-2">
+      <div class="col-12">
+        <div class="glass-card p-4">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="card-title-custom mb-0">
+              <i class="fa-solid fa-chart-line text-primary"></i> Tren Sensor 30 Menit Terakhir
+            </div>
+            <span class="badge bg-secondary-subtle text-secondary py-1 px-3 rounded-pill small">Live via MQTT</span>
+          </div>
+          <div class="chart-container-custom">
+            <canvas id="historyChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="text-center text-secondary small py-4 mt-2">
+      <i class="fa-solid fa-microchip me-1"></i> ECO-GUARD ESP32 Online Dashboard &mdash;
+      Data real-time via MQTT WebSocket &bull; Dibuat untuk Matakuliah Mekatronika Semester 6
+    </footer>
+
+  </div>
+
+  <!-- Bootstrap 5 Bundle JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <script>
+    // =======================================================
+    // INISIALISASI DASHBOARD ONLINE
+    // =======================================================
+    document.addEventListener("DOMContentLoaded", () => {
+      initChart();
+      initMQTT();
+      initInteractions();
+    });
+
+    let historyChart;
+
+    // =======================================================
+    // INITIALIZATION GRAPH (CHART.JS) — sama persis dengan versi lokal
+    // =======================================================
+    function initChart() {
+      const ctx = document.getElementById('historyChart').getContext('2d');
+      historyChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [
+            {
+              label: 'Suhu (°C)',
+              data: [],
+              borderColor: '#ff7e5f',
+              backgroundColor: 'rgba(255, 126, 95, 0.1)',
+              borderWidth: 2,
+              pointRadius: 2,
+              pointHoverRadius: 4,
+              tension: 0.35,
+              fill: true,
+              yAxisID: 'y'
+            },
+            {
+              label: 'Kelembaban (%)',
+              data: [],
+              borderColor: '#0072ff',
+              backgroundColor: 'rgba(0, 114, 255, 0.1)',
+              borderWidth: 2,
+              pointRadius: 2,
+              pointHoverRadius: 4,
+              tension: 0.35,
+              fill: true,
+              yAxisID: 'y1'
+            },
+            {
+              label: 'AQI Kualitas Udara',
+              data: [],
+              borderColor: '#38ef7d',
+              backgroundColor: 'rgba(56, 239, 125, 0.1)',
+              borderWidth: 2,
+              pointRadius: 2,
+              pointHoverRadius: 4,
+              tension: 0.35,
+              fill: true,
+              yAxisID: 'y2'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'top',
+              labels: {
+                color: '#94a3b8',
+                font: { family: 'Plus Jakarta Sans', size: 11, weight: '600' },
+                padding: 15
+              }
+            },
+            tooltip: {
+              mode: 'index',
+              intersect: false,
+              backgroundColor: '#0f172a',
+              titleColor: '#f8fafc',
+              bodyColor: '#e2e8f0',
+              borderColor: 'rgba(255,255,255,0.1)',
+              borderWidth: 1,
+              titleFont: { family: 'Outfit', size: 12, weight: '700' },
+              bodyFont: { family: 'Plus Jakarta Sans', size: 12 }
+            }
+          },
+          scales: {
+            x: {
+              grid: { color: 'rgba(255,255,255,0.04)', drawTicks: false },
+              ticks: { color: '#64748b', font: { size: 10 }, maxRotation: 0, autoSkip: true, autoSkipPadding: 15 }
+            },
+            y: {
+              type: 'linear', display: true, position: 'left',
+              grid: { color: 'rgba(255,255,255,0.04)' },
+              ticks: { color: '#ff7e5f', font: { size: 10 } },
+              title: { display: true, text: 'Suhu (°C)', color: '#ff7e5f', font: { family: 'Outfit', size: 11, weight: '700' } }
+            },
+            y1: {
+              type: 'linear', display: true, position: 'right',
+              grid: { drawOnChartArea: false },
+              ticks: { color: '#0072ff', font: { size: 10 } },
+              title: { display: true, text: 'Kelembaban (%)', color: '#0072ff', font: { family: 'Outfit', size: 11, weight: '700' } }
+            },
+            y2: {
+              type: 'linear', display: false, position: 'right',
+              grid: { drawOnChartArea: false },
+              ticks: { color: '#38ef7d' }
+            }
+          }
+        }
+      });
+    }
+
+    // =======================================================
+    // GAUGE SVG UPDATE — sama persis dengan versi lokal
+    // =======================================================
+    function updateGauge(id, value, min, max) {
+      const bar = document.getElementById('gauge-' + id);
+      const textVal = document.getElementById('val-' + id);
+      if (!bar || !textVal) return;
+      let numVal = parseFloat(value);
+      if (isNaN(numVal)) return;
+      if (numVal < min) numVal = min;
+      if (numVal > max) numVal = max;
+      const percentage = ((numVal - min) / (max - min)) * 100;
+      const offset = 251.2 - (percentage / 100) * 251.2;
+      bar.style.strokeDashoffset = offset;
+      if (id === 'press') textVal.textContent = numVal.toFixed(1);
+      else if (id === 'aqi') textVal.textContent = Math.round(numVal);
+      else textVal.textContent = numVal.toFixed(1);
+    }
+
+    // =======================================================
+    // COMFORT BADGE — sama persis dengan versi lokal
+    // =======================================================
+    function updateComfortBadge(hiVal) {
+      const badge = document.getElementById('badge-comfort');
+      const textHI = document.getElementById('val-hi');
+      if (!badge || !textHI) return;
+      textHI.textContent = hiVal.toFixed(1);
+      if (hiVal < 27) { badge.textContent = "Sangat Nyaman"; badge.className = "comfort-badge badge-good"; }
+      else if (hiVal < 32) { badge.textContent = "Cukup Nyaman"; badge.className = "comfort-badge badge-moderate"; }
+      else if (hiVal < 41) { badge.textContent = "Kurang Nyaman"; badge.className = "comfort-badge badge-warning"; }
+      else { badge.textContent = "Bahaya Panas"; badge.className = "comfort-badge badge-danger"; }
+    }
+
+    // =======================================================
+    // AQI STATUS — sama persis dengan versi lokal
+    // =======================================================
+    function updateAQIStatus(aqiVal) {
+      const lblStatus = document.getElementById('lbl-aqi-status');
+      const banner = document.getElementById('alert-banner');
+      const alertMsg = document.getElementById('alert-message');
+      if (!lblStatus || !banner || !alertMsg) return;
+      if (aqiVal <= 50) { lblStatus.textContent = "Baik (Good)"; banner.classList.add('d-none'); }
+      else if (aqiVal <= 100) { lblStatus.textContent = "Sedang (Moderate)"; banner.classList.add('d-none'); }
+      else if (aqiVal <= 150) {
+        lblStatus.textContent = "Buruk (Unhealthy)";
+        banner.classList.remove('d-none');
+        banner.className = "alert-banner bg-warning-subtle text-warning border-warning mb-4 p-3 d-flex align-items-center justify-content-between rounded-3";
+        alertMsg.textContent = "Kadar polutan sedang tinggi. Udara kurang sehat untuk pernapasan.";
+      } else {
+        lblStatus.textContent = "Bahaya (Hazardous)";
+        banner.classList.remove('d-none');
+        banner.className = "alert-banner bg-danger-subtle text-danger border-danger mb-4 p-3 d-flex align-items-center justify-content-between rounded-3";
+        alertMsg.textContent = "Kualitas udara kritis! Hindari ventilasi luar ruangan dan gunakan masker.";
+      }
+    }
+
+    // =======================================================
+    // VIRTUAL LED — sama persis dengan versi lokal
+    // =======================================================
+    function updateVirtualLED(aqiVal) {
+      const led = document.getElementById('led-indicator');
+      if (!led) return;
+      if (aqiVal <= 50) { led.style.backgroundColor = '#10b981'; led.style.boxShadow = '0 0 16px 2px #10b981, inset 0 0 4px rgba(255,255,255,0.6)'; }
+      else if (aqiVal <= 100) { led.style.backgroundColor = '#0ea5e9'; led.style.boxShadow = '0 0 16px 2px #0ea5e9, inset 0 0 4px rgba(255,255,255,0.6)'; }
+      else if (aqiVal <= 150) { led.style.backgroundColor = '#f59e0b'; led.style.boxShadow = '0 0 16px 2px #f59e0b, inset 0 0 4px rgba(255,255,255,0.6)'; }
+      else { led.style.backgroundColor = '#ef4444'; led.style.boxShadow = '0 0 16px 2px #ef4444, inset 0 0 4px rgba(255,255,255,0.6)'; }
+    }
+
+    // =======================================================
+    // KONEKSI MQTT WEBSOCKET — PENGGANTI SSE
+    // =======================================================
+    function initMQTT() {
+      // Konfigurasi broker MQTT dengan WebSocket over SSL
+      const BROKER_URL   = "wss://broker.emqx.io:8084/mqtt";
+      const TOPIC_SENSOR = "home/sensor_data";
+      const TOPIC_ALERT  = "home/alert";
+      const CLIENT_ID    = "web_eco_" + Math.random().toString(16).substr(2, 8);
+
+      const statusEl = document.getElementById('mqtt-status');
+
+      const client = mqtt.connect(BROKER_URL, {
+        clientId: CLIENT_ID,
+        clean: true,
+        reconnectPeriod: 4000,
+        connectTimeout: 10000,
+      });
+
+      client.on('connect', function () {
+        console.log("[MQTT] ✅ Terhubung ke broker EMQX via WebSocket!");
+        statusEl.innerHTML = '<i class="fa-solid fa-circle me-1 text-success"></i> MQTT: Terhubung';
+
+        // Subscribe ke kedua topik sekaligus
+        client.subscribe([TOPIC_SENSOR, TOPIC_ALERT], function (err) {
+          if (!err) console.log("[MQTT] Subscribe berhasil:", TOPIC_SENSOR, TOPIC_ALERT);
+        });
+      });
+
+      client.on('error', function (err) {
+        console.error("[MQTT] ❌ Error:", err);
+        statusEl.innerHTML = '<i class="fa-solid fa-circle me-1 text-danger"></i> MQTT: Error';
+      });
+
+      client.on('reconnect', function () {
+        statusEl.innerHTML = '<i class="fa-solid fa-circle me-1 text-warning"></i> MQTT: Menghubungkan ulang...';
+      });
+
+      client.on('message', function (topic, message) {
+        try {
+          const data = JSON.parse(message.toString());
+          console.log("[MQTT] 📦 Data dari topik [" + topic + "]:", data);
+
+          if (topic === TOPIC_SENSOR) {
+            // Sembunyikan banner "Menunggu data"
+            const waitingBanner = document.getElementById('waiting-banner');
+            if (waitingBanner) waitingBanner.style.display = 'none';
+
+            // Update semua widget UI
+            updateGauge('temp',  data.temperature, 15,  45);
+            updateGauge('hum',   data.humidity,    20,  100);
+            updateGauge('press', data.pressure,    950, 1050);
+            updateGauge('aqi',   data.aqi,         0,   200);
+
+            document.getElementById('val-ppm').textContent  = (data.ppm || 0).toFixed(1) + ' ppm';
+            document.getElementById('val-time').textContent = data.time || '--:--:--';
+
+            updateComfortBadge(data.heatIndex || 0);
+            updateAQIStatus(data.aqi || 0);
+            updateVirtualLED(data.aqi || 0);
+
+            // Update grafik historis
+            if (historyChart) {
+              historyChart.data.labels.push(data.time);
+              historyChart.data.datasets[0].data.push(data.temperature);
+              historyChart.data.datasets[1].data.push(data.humidity);
+              historyChart.data.datasets[2].data.push(data.aqi);
+              if (historyChart.data.labels.length > 180) {
+                historyChart.data.labels.shift();
+                historyChart.data.datasets.forEach(ds => ds.data.shift());
+              }
+              historyChart.update('none');
+            }
+          }
+        } catch (e) {
+          console.error("[ERROR] Gagal parsing JSON MQTT:", e);
+        }
+      });
+    }
+
+    // =======================================================
+    // INTERACTION CONTROLS
+    // =======================================================
+    function initInteractions() {
+      const btnDemo = document.getElementById('btn-demo');
+      if (btnDemo) {
+        btnDemo.addEventListener('click', () => {
+          alert(
+            "💡 INFORMASI SKEMA NOTIFIKASI & INDIKATOR KONTROL:\n\n" +
+            "Sistem ini menggunakan status LED RGB untuk memberi peringatan visual:\n" +
+            "🟢 AQI <= 50   : Kondisi BAIK (LED Hijau)\n" +
+            "🔵 AQI 51-100  : Kondisi SEDANG (LED Biru)\n" +
+            "🟡 AQI 101-150 : Kondisi BURUK (LED Oranye)\n" +
+            "🔴 AQI > 150   : Kondisi BAHAYA (LED Merah) & Kirim Alert ke MQTT\n\n" +
+            "Kirim MQTT Alert:\n" +
+            "Ketika AQI melewati 100, ESP32 mempublikasikan alert bahaya secara asinkron ke broker MQTT publik pada topic: 'home/alert'"
+          );
+        });
+      }
+    }
+  </script>
+
+</body>
+
+</html>

@@ -17,6 +17,78 @@
   <link rel="stylesheet" href="style.css">
   <!-- MQTT.js via CDN (pengganti EventSource) -->
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    /* ── Demo Mode Toggle Button ── */
+    #btn-toggle-dummy {
+      background: rgba(251, 191, 36, 0.12);
+      color: #fbbf24;
+      border: 1px solid rgba(251, 191, 36, 0.35);
+      padding: 6px 16px;
+      border-radius: 20px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.25s ease;
+      font-family: 'Outfit', sans-serif;
+      letter-spacing: 0.03em;
+    }
+    #btn-toggle-dummy:hover {
+      background: rgba(251, 191, 36, 0.25);
+      border-color: rgba(251, 191, 36, 0.65);
+      color: #fff;
+      box-shadow: 0 0 12px rgba(251, 191, 36, 0.3);
+    }
+    #btn-toggle-dummy.demo-on {
+      background: rgba(251, 191, 36, 0.22);
+      border-color: #fbbf24;
+      color: #fef08a;
+      box-shadow: 0 0 14px rgba(251, 191, 36, 0.4);
+      animation: demo-btn-pulse 2s infinite ease-in-out;
+    }
+    @keyframes demo-btn-pulse {
+      0%, 100% { box-shadow: 0 0 8px rgba(251,191,36,0.35); }
+      50%       { box-shadow: 0 0 20px rgba(251,191,36,0.65); }
+    }
+
+    /* ── Demo Mode Banner ── */
+    #demo-banner {
+      background: linear-gradient(135deg, rgba(251,191,36,0.12), rgba(245,158,11,0.08));
+      border: 1px solid rgba(251,191,36,0.35);
+      border-left: 4px solid #fbbf24;
+      border-radius: 12px;
+      padding: 12px 18px;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      animation: slideInDown 0.4s ease-out;
+    }
+    #demo-banner .demo-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: #fbbf24;
+      display: inline-block;
+      animation: demo-dot-blink 1s infinite;
+    }
+    @keyframes demo-dot-blink {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.4; transform: scale(0.7); }
+    }
+    #demo-banner .demo-badge {
+      background: rgba(251,191,36,0.15);
+      border: 1px solid rgba(251,191,36,0.4);
+      color: #fbbf24;
+      padding: 3px 10px;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      font-family: monospace;
+      white-space: nowrap;
+    }
+  </style>
 </head>
 
 <body>
@@ -50,12 +122,14 @@
         <i class="fa-solid fa-house-laptop me-2"></i>ECO-GUARD ESP32
       </a>
       <div class="d-flex align-items-center gap-3 flex-wrap">
+        <!-- Tombol Toggle Mode Demo -->
+        <button id="btn-toggle-dummy" title="Aktifkan/matikan simulasi data dummy">
+          <i class="fa-solid fa-flask-vial"></i>
+          <span id="btn-dummy-label">Mode Demo</span>
+        </button>
         <!-- Status Koneksi MQTT (Dinamis) -->
         <span id="mqtt-status" class="text-secondary small d-none d-sm-inline">
           <i class="fa-solid fa-circle-nodes me-1"></i> Menghubungkan ke MQTT...
-        </span>
-        <span class="text-secondary small">
-          <i class="fa-solid fa-circle-nodes me-1 text-info"></i> MQTT Alert: Active
         </span>
         <!-- RGB LED Virtual Glow -->
         <div class="d-flex align-items-center gap-2 bg-dark-subtle px-3 rounded-pill border border-secondary-subtle" style="padding-top:0.35rem;padding-bottom:0.35rem;">
@@ -81,10 +155,22 @@
       <span class="threshold-badge text-danger border-danger">AQI > 100</span>
     </div>
 
-    <!-- Banner Menunggu Data (tampil saat belum ada data dari ESP32) -->
+    <!-- Banner Mode Demo (tampil saat simulasi aktif) -->
+    <div id="demo-banner" style="display:none;">
+      <div class="d-flex align-items-center gap-3">
+        <span class="demo-dot"></span>
+        <div>
+          <strong style="color:#fbbf24;">Mode Simulasi Aktif</strong>
+          <span class="text-secondary ms-2 small">Data dummy digenerate setiap 2 detik — ESP32 tidak dibutuhkan.</span>
+        </div>
+      </div>
+      <span class="demo-badge">DEMO MODE</span>
+    </div>
+
+    <!-- Banner Menunggu Data (tampil saat belum ada data dari ESP32 maupun dummy) -->
     <div id="waiting-banner" class="alert alert-secondary d-flex align-items-center gap-3 mb-4">
       <div class="spinner-border spinner-border-sm text-info" role="status"></div>
-      <span>Menunggu data dari ESP32 via MQTT broker... Pastikan ESP32 aktif dan terhubung ke WiFi.</span>
+      <span>Menunggu data dari ESP32 via MQTT... &nbsp;<strong class="text-warning">Atau klik "Mode Demo"</strong> di kanan atas untuk simulasi data tanpa ESP32.</span>
     </div>
 
     <!-- Grid 4 Gauges Utama -->
@@ -233,7 +319,7 @@
             <a href="https://mqttx.app/web" target="_blank" id="btn-mqttx" class="btn-glass">
               <i class="fa-solid fa-terminal fs-5"></i> Buka MQTTX Web
             </a>
-            <button id="btn-demo" class="btn-glass bg-opacity-10 border-info text-info">
+            <button id="btn-threshold" class="btn-glass bg-opacity-10 border-info text-info">
               <i class="fa-solid fa-wand-magic-sparkles"></i> Info Threshold
             </button>
           </div>
@@ -279,10 +365,172 @@
     document.addEventListener("DOMContentLoaded", () => {
       initChart();
       initMQTT();
+      initDummyMode();
       initInteractions();
     });
 
+    // =======================================================
+    // STATE GLOBAL
+    // =======================================================
     let historyChart;
+    let dummyActive    = false;   // apakah mode simulasi sedang aktif
+    let dummyInterval  = null;    // setInterval handle untuk dummy
+    let mqttDataReceived = false; // flag: apakah sudah pernah terima data MQTT
+    let autoStartTimer = null;    // timer auto-start dummy jika MQTT tak kunjung datang
+
+    // Nilai dummy state (berfluktuasi perlahan — simulasi realistis)
+    const _dummy = {
+      temp:     28.5,
+      humidity: 65.0,
+      pressure: 1013.2,
+      aqi:      42,
+      ppm:      380.0,
+      heatIdx:  30.2,
+    };
+
+    // Helper: clamp nilai agar tetap dalam batas realistis
+    function clamp(val, min, max) {
+      return Math.min(Math.max(val, min), max);
+    }
+
+    // Helper: fluktuasi acak kecil (random walk)
+    function fluctuate(val, step, min, max) {
+      return clamp(val + (Math.random() - 0.5) * step * 2, min, max);
+    }
+
+    // Generate satu paket data dummy yang realistis
+    function generateDummyData() {
+      _dummy.temp     = fluctuate(_dummy.temp,     0.4,  22.0, 38.0);
+      _dummy.humidity = fluctuate(_dummy.humidity, 1.2,  35.0, 90.0);
+      _dummy.pressure = fluctuate(_dummy.pressure, 0.3,  995.0, 1030.0);
+      _dummy.aqi      = Math.round(fluctuate(_dummy.aqi, 4, 10, 170));
+      _dummy.ppm      = fluctuate(_dummy.ppm,      8.0,  250.0, 800.0);
+
+      // Heat index sederhana: HI ≈ temp + 0.05 * humidity - 1.5  (approximasi)
+      _dummy.heatIdx = clamp(_dummy.temp + 0.05 * _dummy.humidity - 1.5, 20, 55);
+
+      const now = new Date();
+      const timeStr = now.toTimeString().slice(0, 8);
+
+      return {
+        temperature: parseFloat(_dummy.temp.toFixed(1)),
+        humidity:    parseFloat(_dummy.humidity.toFixed(1)),
+        pressure:    parseFloat(_dummy.pressure.toFixed(1)),
+        aqi:         _dummy.aqi,
+        ppm:         parseFloat(_dummy.ppm.toFixed(1)),
+        heatIndex:   parseFloat(_dummy.heatIdx.toFixed(1)),
+        time:        timeStr,
+      };
+    }
+
+    // Kirim satu sample dummy ke semua widget UI
+    function pushDummyTick() {
+      const data = generateDummyData();
+      console.log("[DUMMY] 🔬 Data simulasi:", data);
+      applyDataToUI(data);
+    }
+
+    // =======================================================
+    // FUNGSI TERPUSAT: Update seluruh UI dari objek data
+    // (digunakan baik oleh MQTT maupun dummy)
+    // =======================================================
+    function applyDataToUI(data) {
+      // Sembunyikan waiting banner
+      const wb = document.getElementById('waiting-banner');
+      if (wb) wb.style.display = 'none';
+
+      updateGauge('temp',  data.temperature, 15,   45);
+      updateGauge('hum',   data.humidity,    20,  100);
+      updateGauge('press', data.pressure,    950, 1050);
+      updateGauge('aqi',   data.aqi,         0,   200);
+
+      document.getElementById('val-ppm').textContent  = (data.ppm || 0).toFixed(1) + ' ppm';
+      document.getElementById('val-time').textContent = data.time || '--:--:--';
+
+      updateComfortBadge(data.heatIndex || 0);
+      updateAQIStatus(data.aqi || 0);
+      updateVirtualLED(data.aqi || 0);
+
+      if (historyChart) {
+        historyChart.data.labels.push(data.time);
+        historyChart.data.datasets[0].data.push(data.temperature);
+        historyChart.data.datasets[1].data.push(data.humidity);
+        historyChart.data.datasets[2].data.push(data.aqi);
+        if (historyChart.data.labels.length > 180) {
+          historyChart.data.labels.shift();
+          historyChart.data.datasets.forEach(ds => ds.data.shift());
+        }
+        historyChart.update('none');
+      }
+    }
+
+    // =======================================================
+    // DUMMY MODE ENGINE
+    // =======================================================
+    function initDummyMode() {
+      const btn   = document.getElementById('btn-toggle-dummy');
+      const label = document.getElementById('btn-dummy-label');
+      const banner = document.getElementById('demo-banner');
+
+      btn.addEventListener('click', () => {
+        if (dummyActive) {
+          stopDummy();
+        } else {
+          startDummy();
+        }
+      });
+
+      // Auto-start dummy jika tidak ada data MQTT dalam 8 detik
+      autoStartTimer = setTimeout(() => {
+        if (!mqttDataReceived && !dummyActive) {
+          console.log("[DUMMY] ⏱ Tidak ada data MQTT dalam 8 detik — auto-start mode demo.");
+          startDummy();
+        }
+      }, 8000);
+    }
+
+    function startDummy() {
+      if (dummyActive) return;
+      dummyActive = true;
+
+      const btn    = document.getElementById('btn-toggle-dummy');
+      const label  = document.getElementById('btn-dummy-label');
+      const banner = document.getElementById('demo-banner');
+
+      btn.classList.add('demo-on');
+      label.textContent = 'Stop Demo';
+      if (banner) banner.style.display = 'flex';
+
+      // Langsung tampilkan 1 tick
+      pushDummyTick();
+
+      // Interval setiap 2 detik (sama dengan ESP32)
+      dummyInterval = setInterval(pushDummyTick, 2000);
+      console.log("[DUMMY] ▶ Mode simulasi AKTIF.");
+    }
+
+    function stopDummy() {
+      if (!dummyActive) return;
+      dummyActive = false;
+
+      clearInterval(dummyInterval);
+      dummyInterval = null;
+
+      const btn    = document.getElementById('btn-toggle-dummy');
+      const label  = document.getElementById('btn-dummy-label');
+      const banner = document.getElementById('demo-banner');
+
+      btn.classList.remove('demo-on');
+      label.textContent = 'Mode Demo';
+      if (banner) banner.style.display = 'none';
+
+      // Tampilkan kembali waiting banner jika MQTT belum ada data
+      if (!mqttDataReceived) {
+        const wb = document.getElementById('waiting-banner');
+        if (wb) wb.style.display = 'flex';
+      }
+      console.log("[DUMMY] ⏹ Mode simulasi DIHENTIKAN.");
+    }
 
     // =======================================================
     // INITIALIZATION GRAPH (CHART.JS) — sama persis dengan versi lokal
@@ -495,35 +743,12 @@
           console.log("[MQTT] 📦 Data dari topik [" + topic + "]:", data);
 
           if (topic === TOPIC_SENSOR) {
-            // Sembunyikan banner "Menunggu data"
-            const waitingBanner = document.getElementById('waiting-banner');
-            if (waitingBanner) waitingBanner.style.display = 'none';
+            // Data MQTT nyata tiba — hentikan dummy & timer auto-start
+            if (autoStartTimer) { clearTimeout(autoStartTimer); autoStartTimer = null; }
+            if (dummyActive) stopDummy();
+            mqttDataReceived = true;
 
-            // Update semua widget UI
-            updateGauge('temp',  data.temperature, 15,  45);
-            updateGauge('hum',   data.humidity,    20,  100);
-            updateGauge('press', data.pressure,    950, 1050);
-            updateGauge('aqi',   data.aqi,         0,   200);
-
-            document.getElementById('val-ppm').textContent  = (data.ppm || 0).toFixed(1) + ' ppm';
-            document.getElementById('val-time').textContent = data.time || '--:--:--';
-
-            updateComfortBadge(data.heatIndex || 0);
-            updateAQIStatus(data.aqi || 0);
-            updateVirtualLED(data.aqi || 0);
-
-            // Update grafik historis
-            if (historyChart) {
-              historyChart.data.labels.push(data.time);
-              historyChart.data.datasets[0].data.push(data.temperature);
-              historyChart.data.datasets[1].data.push(data.humidity);
-              historyChart.data.datasets[2].data.push(data.aqi);
-              if (historyChart.data.labels.length > 180) {
-                historyChart.data.labels.shift();
-                historyChart.data.datasets.forEach(ds => ds.data.shift());
-              }
-              historyChart.update('none');
-            }
+            applyDataToUI(data);
           }
         } catch (e) {
           console.error("[ERROR] Gagal parsing JSON MQTT:", e);
@@ -535,9 +760,10 @@
     // INTERACTION CONTROLS
     // =======================================================
     function initInteractions() {
-      const btnDemo = document.getElementById('btn-demo');
-      if (btnDemo) {
-        btnDemo.addEventListener('click', () => {
+      // Tombol Info Threshold (bukan lagi btn-demo)
+      const btnThreshold = document.getElementById('btn-threshold');
+      if (btnThreshold) {
+        btnThreshold.addEventListener('click', () => {
           alert(
             "💡 INFORMASI SKEMA NOTIFIKASI & INDIKATOR KONTROL:\n\n" +
             "Sistem ini menggunakan status LED RGB untuk memberi peringatan visual:\n" +
@@ -546,7 +772,11 @@
             "🟡 AQI 101-150 : Kondisi BURUK (LED Oranye)\n" +
             "🔴 AQI > 150   : Kondisi BAHAYA (LED Merah) & Kirim Alert ke MQTT\n\n" +
             "Kirim MQTT Alert:\n" +
-            "Ketika AQI melewati 100, ESP32 mempublikasikan alert bahaya secara asinkron ke broker MQTT publik pada topic: 'home/alert'"
+            "Ketika AQI melewati 100, ESP32 mempublikasikan alert bahaya secara asinkron ke\n" +
+            "broker MQTT publik pada topic: 'home/alert'\n\n" +
+            "💡 MODE DEMO:\n" +
+            "Klik tombol 'Mode Demo' di navbar untuk melihat dashboard dengan data simulasi\n" +
+            "tanpa perlu ESP32 terhubung. Data akan digenerate otomatis setiap 2 detik."
           );
         });
       }
